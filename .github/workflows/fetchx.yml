@@ -1,0 +1,47 @@
+﻿name: fetchx
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+jobs:
+  get:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: setup ffmpeg
+        run: |
+          sudo apt-get update -y >/dev/null 2>&1
+          sudo apt-get install -y -qq ffmpeg curl >/dev/null 2>&1
+          ffmpeg -version | head -1
+      - name: download
+        run: |
+          set -x
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36"
+          curl -sL --retry 2 --max-time 1200 -A "$UA" -o video.mp4 "https://video.twimg.com/amplify_video/2099188744591220736/vid/avc1/3840x2160/aMfn3FX9x_iQjzxs.mp4?tag=29" || echo DLFAIL
+          if [ ! -s video.mp4 ]; then
+            pip install -q yt-dlp 2>/dev/null || true
+            yt-dlp -f "bv*[height<=720]+ba/b" -o video.mp4 "https://x.com/maxinomics/status/2099237489986912556" || echo YTFAIL
+          fi
+          ls -lh video.mp4 || true
+      - name: probe
+        run: ffprobe -v error -show_entries format=duration,size,bit_rate -of default=noprint_wrappers=1 video.mp4 || true
+      - name: audio
+        run: ffmpeg -y -i video.mp4 -vn -ac 1 -ar 16000 -acodec libmp3lame -q:a 3 audio.mp3
+      - name: keyframes
+        run: |
+          mkdir -p frames
+          D=$(ffprobe -v error -show_entries format=duration -of csv=p=0 video.mp4)
+          for pt in 0.02 0.08 0.15 0.22 0.30 0.38 0.46 0.55 0.65 0.80 0.90; do
+            t=$(awk -v D="$D" -v p="$pt" 'BEGIN{printf "%.1f", D*p}')
+            ffmpeg -y -ss "$t" -i video.mp4 -frames:v 1 -vf "scale=1280:-1:force_original_aspect_ratio=decrease" "frames/f_${pt}.jpg" 2>/dev/null || true
+          done
+          ls -lh frames/
+      - name: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot
+          path: |
+            audio.mp3
+            frames/
+          retention-days: 1
